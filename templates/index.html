@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Collaborative Whiteboard - Room {{ room_id }}</title>
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    margin: 0;
+    padding: 0;
+    background: #f4f5f7;
+    color: #222;
+  }
+  header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 10px 16px;
+    background: #ffffff;
+    border-bottom: 1px solid #ddd;
+  }
+  header h1 {
+    font-size: 18px;
+    margin: 0;
+    flex: 1;
+  }
+  #room-badge {
+    font-size: 13px;
+    color: #666;
+    background: #eee;
+    padding: 4px 10px;
+    border-radius: 12px;
+  }
+  #toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  #toolbar label {
+    font-size: 13px;
+  }
+  button {
+    cursor: pointer;
+    padding: 6px 14px;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    background: #fff;
+  }
+  button:hover {
+    background: #f0f0f0;
+  }
+  #status {
+    font-size: 12px;
+    color: #888;
+  }
+  #board-wrap {
+    display: flex;
+    justify-content: center;
+    padding: 20px;
+  }
+  canvas {
+    background: #ffffff;
+    border: 1px solid #ccc;
+    border-radius: 8px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+    cursor: crosshair;
+    touch-action: none;
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Collaborative Whiteboard</h1>
+  <span id="room-badge">room: {{ room_id }}</span>
+  <div id="toolbar">
+    <label>Color <input type="color" id="color-picker" value="#1a1a1a"></label>
+    <label>Width <input type="range" id="width-picker" min="1" max="20" value="3"></label>
+    <button id="clear-btn">Clear board</button>
+  </div>
+  <span id="status">connecting...</span>
+</header>
+
+<div id="board-wrap">
+  <canvas id="board" width="900" height="600"></canvas>
+</div>
+
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script>
+  const roomId = {{ room_id | tojson }};
+  const canvas = document.getElementById("board");
+  const ctx = canvas.getContext("2d");
+  const colorPicker = document.getElementById("color-picker");
+  const widthPicker = document.getElementById("width-picker");
+  const clearBtn = document.getElementById("clear-btn");
+  const statusEl = document.getElementById("status");
+
+  const socket = io();
+
+  let drawing = false;
+  let currentStroke = null;
+
+  function drawStroke(stroke) {
+    const points = stroke.points;
+    if (!points || points.length < 2) return;
+    ctx.strokeStyle = stroke.color || "#1a1a1a";
+    ctx.lineWidth = stroke.width || 3;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    ctx.moveTo(points[0][0], points[0][1]);
+    for (let i = 1; i < points.length; i++) {
+      ctx.lineTo(points[i][0], points[i][1]);
+    }
+    ctx.stroke();
+  }
+
+  function redrawAll(strokes) {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    strokes.forEach(drawStroke);
+  }
+
+  function pointerPos(evt) {
+    const rect = canvas.getBoundingClientRect();
+    return [evt.clientX - rect.left, evt.clientY - rect.top];
+  }
+
+  canvas.addEventListener("mousedown", (evt) => {
+    drawing = true;
+    currentStroke = {
+      points: [pointerPos(evt)],
+      color: colorPicker.value,
+      width: Number(widthPicker.value),
+    };
+  });
+
+  canvas.addEventListener("mousemove", (evt) => {
+    if (!drawing || !currentStroke) return;
+    const pos = pointerPos(evt);
+    currentStroke.points.push(pos);
+    // draw locally as we go for a responsive feel
+    drawStroke({
+      points: currentStroke.points.slice(-2),
+      color: currentStroke.color,
+      width: currentStroke.width,
+    });
+  });
+
+  function finishStroke() {
+    if (!drawing || !currentStroke) return;
+    drawing = false;
+    if (currentStroke.points.length > 1) {
+      socket.emit("draw_event", { room_id: roomId, stroke: currentStroke });
+    }
+    currentStroke = null;
+  }
+
+  canvas.addEventListener("mouseup", finishStroke);
+  canvas.addEventListener("mouseleave", finishStroke);
+
+  clearBtn.addEventListener("click", () => {
+    socket.emit("clear_board", { room_id: roomId });
+  });
+
+  socket.on("connect", () => {
+    statusEl.textContent = "connected";
+    socket.emit("join", { room_id: roomId });
+  });
+
+  socket.on("disconnect", () => {
+    statusEl.textContent = "disconnected";
+  });
+
+  socket.on("board_state", (data) => {
+    redrawAll(data.strokes || []);
+  });
+
+  socket.on("draw_event", (data) => {
+    drawStroke(data.stroke);
+  });
+
+  socket.on("board_cleared", () => {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+  });
+</script>
+</body>
+</html>
